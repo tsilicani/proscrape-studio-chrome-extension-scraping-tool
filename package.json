@@ -1,7 +1,7 @@
 {
   "name": "proscrape",
   "version": "1.0.0",
-  "description": "A Vue.js web extension",
+  "description": "A Vue.js chrome extension",
   "author": "tsilicani <silicani80@gmail.com>",
   "scripts": {
     "build": "cross-env NODE_ENV=production webpack --hide-modules",

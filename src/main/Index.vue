@@ -5,7 +5,7 @@
             <span class="title ml-3 mr-5 ciccio">ProScrape&nbsp;<span class="font-weight-light">Studio</span></span>
             <v-text-field v-model="url" outlined dense hide-details label="Url" append-icon="mdi-location-enter" clearable @click:append="go(url)" />
             <v-text-field v-model="selector" class="ml-2" outlined dense hide-details label="Xpath" clearable />
-            <v-text-field v-model="selectorTestOutput" class="ml-2" label="Output" outlined dense hide-details />
+            <v-text-field v-model="selectorTestOutput" class="ml-2" :label="selectorTestOutput? 'Output' : 'No Output'" outlined dense hide-details :disabled="true" />
         </v-app-bar>
         <v-navigation-drawer temporary v-model="drawer" app dark :style="{background: background}">
             <v-list dense>
@@ -82,7 +82,6 @@
                 </v-card-actions>
             </v-card>
         </v-dialog>
-        <div id="tab" v-html="html" class="d-none"></div>
     </v-app>
 </template>
 <script>
@@ -91,7 +90,13 @@ const FileSaver = require('file-saver')
 import { v4 as uuidv4 } from 'uuid'
 
 const demo =
-    `console.log('ciao')`
+    `/*
+const tabLaunched = await go('https://example.org')
+await sleep(seconds)
+const string = await extract('//h1')
+out({'string': string})
+await inject("console.log('ciao)")
+*/`
 
 export default {
     components: {
@@ -103,14 +108,20 @@ export default {
             enableBasicAutocompletion: true,
             enableSnippets: true,
             enableLiveAutocompletion: true,
+            useWorker: false
         },
         overlay: false,
         drawer: false,
         dialogRename: false,
         background: '#272822',
-        html: '',
+        fetchCount: 0,
         selectorTestOutput: '',
-        output: '',
+        get output() {
+            return localStorage.getItem(this.id) || '{}'
+        },
+        set output(payload) {
+            payload ? localStorage.setItem(this.id, payload) : localStorage.setItem(this.id, '{}')
+        },
         get url() {
             return localStorage.getItem('url') || ''
         },
@@ -147,7 +158,8 @@ export default {
         set name(payload) {
             payload ? localStorage.setItem('name', payload) : localStorage.setItem('name', '')
         },
-        scripts: []
+        scripts: [],
+        tabDoc: undefined
     }),
     computed: {
         script: {
@@ -162,16 +174,16 @@ export default {
         },
         selectorTestParams: {
             get() {
-                return [this.html, this.selector]
+                return [this.fetchCount, this.selector]
             }
-        },
+        }
     },
     watch: {
-        script(val) {
+        script() {
             this.save()
         },
-        selectorTestParams(val) {
-            this.selectorTestOutput = this.extract(this.selector)
+        selectorTestParams() {
+            if (this.tabId) { this.extract(this.selector) }
         },
     },
     methods: {
@@ -215,38 +227,32 @@ export default {
             this.code = demo
         },
         go(url) {
-            const setHtml = (html) => { this.html = html }
+            const self = this
             return new Promise(resolve => {
                 chrome.tabs.query({ currentWindow: true }, (tabs) => {
-                    if (this.tabId && tabs.filter(tab => tab.id == this.tabId).length) {
-                        chrome.tabs.update(this.tabId, { url: url, active: false }, async tab => {
-                            this.url = url
+                    if (self.tabId && tabs.filter(tab => tab.id == self.tabId).length) {
+                        chrome.tabs.update(self.tabId, { url: url, active: true }, async tab => {
+                            self.url = url
                             chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
                                 if (info.status === 'complete' && tabId === tab.id) {
                                     chrome.tabs.onUpdated.removeListener(listener)
-                                    chrome.tabs.executeScript(tab.id, {
-                                        "code": "const result = document.body.innerHTML; result;"
-                                    }, async result => {
-                                        setHtml(result ? result[0].split('src="').join('srx="') : '')
-                                        resolve(tab)
-                                    })
+                                    self.fetchCount++
+                                    self.setActive('main')
+                                    resolve(tab)
                                 }
                             })
                         })
                     } else { // create new
                         return new Promise(resolve => {
-                            chrome.tabs.create({ url: url, active: false }, async tab => {
-                                this.url = url
-                                this.tabId = tab.id
+                            chrome.tabs.create({ url: url, active: true }, async tab => {
+                                self.url = url
+                                self.tabId = tab.id
                                 chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
                                     if (info.status === 'complete' && tabId === tab.id) {
                                         chrome.tabs.onUpdated.removeListener(listener)
-                                        chrome.tabs.executeScript(tab.id, {
-                                            "code": "const result = document.body.innerHTML; result;"
-                                        }, async result => {
-                                            setHtml(result ? result[0].split('src="').join('srx="') : '')
-                                            resolve(tab)
-                                        })
+                                        self.fetchCount++
+                                        self.setActive('main')
+                                        resolve(tab)
                                     }
                                 })
                             })
@@ -255,61 +261,93 @@ export default {
                 })
             })
         },
+        setActive(tabAlias) {
+            console.assert(tabAlias == 'main' || tabAlias == 'tab', { tabAlias: tabAlias, errorMsg: 'Invalid argument.' })
+            const self = this
+            const filterFunc = tabAlias == 'main' ? (tab) => { return tab.url == window.location.href } : (tab) => { return tab.id == self.tabId }
+            chrome.tabs.query({ currentWindow: true }, (tabs) => {
+                const tab = tabs.filter(filterFunc)
+                if (tab) {
+                    setTimeout(() => { chrome.tabs.update(tab[0].id, { active: true }) }, 1000)
+                } else {
+                    console.log('No tab found.')
+                }
+            })
+        },
         destroyTab() {
             chrome.tabs.remove(this.tabId)
             this.tabId = ''
         },
         getTabInfo() {
-            const tabId = this.tabId
+            const self = this
             chrome.tabs.query({ currentWindow: true }, (tabs) => {
-                return tabs.filter((tab) => { return tab.id == parseInt(tabId) })
+                return tabs.filter((tab) => { return tab.id == self.tabId })
             })
         },
         extract(xpath) {
-            this.testxml()
-            // try {
-            //     const selector = `//*[@id='tab']${xpath}`
-            //     console.log(selector)
-            //     console.log(document.getElementById('tab'))
-            //     console.log(document.readyState)
-            //     const result = document.evaluate(selector, document, null, XPathResult.STRING_TYPE, null)
-            //     console.log(result.stringValue)
-            //     setTimeout(() => {
-            //         const result2 = document.evaluate(selector, document, null, XPathResult.STRING_TYPE, null)
-            //         console.log(result2.stringValue)
-            //     }, 100)
-            //     return result.stringValue
-            // } catch {
-            //     console.log('error')
-            //     return ''
-            // }
-        },
-        testxml() {
-            const xpath = this.selector
-            const selector = `//*[@id='tab']${xpath}`
-            let parser = new DOMParser()
-            let doc = parser.parseFromString(this.html, "text/html")
-            console.log(doc)
-            const result2 = doc.evaluate('//h3', doc, null, XPathResult.STRING_TYPE, null)
-            console.log(result2.stringValue)
-            // setTimeout(() => {
-
-            // }, 2000)
-
-
-        },
-        evaluate() {
-            const sleep = (seconds) => { return new Promise((resolve) => setTimeout(resolve, seconds * 1000)) }
-            const go = (url) => { this.go(url) }
-            const extract = (xpath) => this.extract(xpath)
-            const click = (xpath) => { this.clickOn(xpath) }
-            const tabInfo = () => { return this.getTabInfo() }
-            eval(this.code)
+            const self = this
+            return new Promise(resolve => {
+                chrome.tabs.executeScript(self.tabId, {
+                    "code": "document.documentElement.innerHTML;"
+                }, async result => {
+                    const htmlString = result ? result[0] : ''
+                    const parser = new DOMParser()
+                    const doc = parser.parseFromString(htmlString, "text/html")
+                    let stringExtracted = ''
+                    if (xpath) {
+                        try {
+                            const extracted = doc.evaluate(xpath, doc, null, XPathResult.STRING_TYPE, null)
+                            stringExtracted = extracted.stringValue
+                        } catch (e) {
+                            console.log(e)
+                        }
+                    }
+                    if (self.selector == xpath) { self.selectorTestOutput = stringExtracted }
+                    resolve(stringExtracted)
+                })
+            })
         },
         clickOn(xpath) {
-            const code = `const xPathRes = document.evaluate("${xpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); xPathRes.singleNodeValue.click();`
-            chrome.tabs.executeScript(this.tabId, { "code": code }, this.getTabInfo)
+            // const code = `document.evaluate("${xpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();`
+            // chrome.tabs.executeScript(this.tabId, { "code": code }, this.getTabInfo)
+            return this.inject(`document.evaluate("${xpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();`)
         },
+        highlightElement(xpath) {
+            const highlight = () => {
+                
+            }
+            let toggle = false
+            setInterval(() => {
+                toggle
+            }, 200)
+        },
+        inject(code) {
+            this.setActive('tab')
+            const self = this
+            return new Promise(resolve => {
+                chrome.tabs.executeScript(self.tabId, {
+                    "code": code
+                }, async result => {
+                    resolve(result)
+                })
+            })
+        },
+        out(val) {
+            this.output = val
+        },
+        evaluate() {
+            console.log('Evaluating...')
+            const sleep = (seconds) => { return new Promise((resolve) => setTimeout(resolve, seconds * 1000)) }
+            const go = this.go
+            const inject = this.inject
+            const extract = this.extract
+            const click = this.clickOn
+            const tabInfo = this.getTabInfo
+            const out = (o) => { this.output = JSON.stringify({ ...JSON.parse(this.output), ...o }) }
+            const reset = () => { this.output = '{}' }
+            eval(`async function main(){${this.code}} main()`)
+            console.log('Evaluated.')
+        }
     },
     beforeCreate() {
         this.overlay = true
