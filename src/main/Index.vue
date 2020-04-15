@@ -238,7 +238,9 @@ export default {
                                     chrome.tabs.onUpdated.removeListener(listener)
                                     self.fetchCount++
                                     self.setActive('main')
-                                    resolve(tab)
+                                    self.injectJsFile()
+                                        .then(self.injectCSSFile())
+                                        .then(() => { resolve(tab) })
                                 }
                             })
                         })
@@ -252,7 +254,9 @@ export default {
                                         chrome.tabs.onUpdated.removeListener(listener)
                                         self.fetchCount++
                                         self.setActive('main')
-                                        resolve(tab)
+                                        self.injectJsFile()
+                                            .then(self.injectCSSFile())
+                                            .then(() => { resolve(tab) })
                                     }
                                 })
                             })
@@ -308,13 +312,11 @@ export default {
             })
         },
         clickOn(xpath) {
-            // const code = `document.evaluate("${xpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();`
-            // chrome.tabs.executeScript(this.tabId, { "code": code }, this.getTabInfo)
             return this.inject(`document.evaluate("${xpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();`)
         },
         highlightElement(xpath) {
             const highlight = () => {
-                
+
             }
             let toggle = false
             setInterval(() => {
@@ -327,6 +329,27 @@ export default {
             return new Promise(resolve => {
                 chrome.tabs.executeScript(self.tabId, {
                     "code": code
+                }, async result => {
+                    resolve(result)
+                })
+            })
+        },
+        injectJsFile() {
+            const self = this
+            return new Promise(resolve => {
+                chrome.tabs.executeScript(self.tabId, {
+                    "file": 'inject-lib.js'
+                }, async result => {
+                    console.log(result)
+                    resolve(result)
+                })
+            })
+        },
+        injectCSSFile() {
+            const self = this
+            return new Promise(resolve => {
+                chrome.tabs.insertCSS(self.tabId, {
+                    "file": "inject.css"
                 }, async result => {
                     resolve(result)
                 })
