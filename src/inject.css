@@ -1,3 +1,36 @@
+#e8s9c1uam4my6s4k7u7k {
+    all: initial;
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    background-color: white;
+    padding: 2px;
+    height: 20px;
+    text-align: center;
+    border: 2px solid red;
+    z-index: 10000000000;
+}
+
 body {
-    background-color: blue;
+    padding-bottom: 20px !important;
+}
+
+:-webkit-autofill {
+    animation-name: onAutoFillStart;
+}
+
+:not(:-webkit-autofill) {
+    animation-name: onAutoFillCancel;
+}
+
+@keyframes onAutoFillStart {
+    from {}
+
+    to {}
+}
+
+@keyframes onAutoFillCancel {
+    from {}
+
+    to {}
 }

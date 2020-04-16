@@ -21,7 +21,7 @@
                 </v-list-item>
                 <v-divider dark class="my-4" />
                 <v-list-item>
-                    <v-list-item-title>Scripts</v-list-item-title>
+                    <v-list-item-title>Projects</v-list-item-title>
                     <v-spacer></v-spacer>
                     <v-btn icon @click="clear(); drawer=false">
                         <v-icon>mdi-plus</v-icon>
@@ -30,8 +30,11 @@
                         <input type="file" @change="loadFromFile" ref="uploader" class="d-none">
                         <v-icon>mdi-file-upload-outline</v-icon>
                     </v-btn>
-                    <v-btn icon @click="exportFile; drawer=false">
+                    <v-btn icon @click="exportScripts(); drawer=false">
                         <v-icon>mdi-content-save</v-icon>
+                    </v-btn>
+                    <v-btn icon @click="exportData(); drawer=false">
+                        <v-icon>mdi-database-export</v-icon>
                     </v-btn>
                 </v-list-item>
                 <v-divider dark class="my-4" />
@@ -39,7 +42,7 @@
                     <v-list-item link>
                         <v-list-item-title @click="script=item; drawer=false">{{item.name?item.name:'Untitled'}}</v-list-item-title>
                         <v-spacer></v-spacer>
-                        <v-btn icon @click="removeScript(item.id)">
+                        <v-btn icon @click="removeProject(item.id)">
                             <v-icon>mdi-close</v-icon>
                         </v-btn>
                     </v-list-item>
@@ -116,6 +119,7 @@ export default {
         background: '#272822',
         fetchCount: 0,
         selectorTestOutput: '',
+        codeIsNew: undefined,
         get output() {
             return localStorage.getItem(this.id) || '{}'
         },
@@ -180,7 +184,11 @@ export default {
     },
     watch: {
         script() {
-            this.save()
+            if (this.codeIsNew) {
+                this.codeIsNew = false
+            } else {
+                this.save()
+            }
         },
         selectorTestParams() {
             if (this.tabId) { this.extract(this.selector) }
@@ -198,13 +206,29 @@ export default {
                 this.sync()
             }
         },
-        removeScript(id) {
+        removeProject(id) {
+            if (this.id == id) {
+                this.clear()
+            }
             this.scripts = this.scripts.filter(script => script.id != id)
+            this.script = this.script
             this.sync()
+            localStorage.removeItem(id)
         },
-        exportFile() {
+        getDate() {
+            const t = new Date()
+            const hr = ("0" + t.getHours()).slice(-2);
+            const min = ("0" + t.getMinutes()).slice(-2);
+            const sec = ("0" + t.getSeconds()).slice(-2);
+            return t.getFullYear() + "-" + t.getMonth() + 1 + "-" + t.getDate() + "-" + hr + "-" + min + "-" + sec
+        },
+        exportScripts() {
             const blob = new Blob([JSON.stringify(this.scripts)], { type: "text/plain;charset=utf-8" });
-            FileSaver(blob, "pro-scrape-backup.json")
+            FileSaver(blob, `ProScrape scripts backup ${this.getDate()}.json`)
+        },
+        exportData() {
+            const blob = new Blob([this.output], { type: "text/plain;charset=utf-8" });
+            FileSaver(blob, `ProScrape data backup ${this.name ? this.name : 'Untitled'} ${this.id} ${this.getDate()}.json`)
         },
         loadFromFile(ev) {
             const file = ev.target.files[0];
@@ -222,6 +246,7 @@ export default {
             require('brace/snippets/javascript') //snippet
         },
         clear() {
+            this.codeIsNew = true
             this.id = ''
             this.name = ''
             this.code = demo
@@ -232,24 +257,26 @@ export default {
                 chrome.tabs.query({ currentWindow: true }, (tabs) => {
                     if (self.tabId && tabs.filter(tab => tab.id == self.tabId).length) {
                         chrome.tabs.update(self.tabId, { url: url, active: true }, async tab => {
-                            self.url = url
                             chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-                                if (info.status === 'complete' && tabId === tab.id) {
-                                    chrome.tabs.onUpdated.removeListener(listener)
-                                    self.fetchCount++
-                                    self.setActive('main')
-                                    self.injectJsFile()
-                                        .then(self.injectCSSFile())
-                                        .then(() => { resolve(tab) })
+                                if (tabId === tab.id) {
+                                    if (info.status === 'complete') {
+                                        chrome.tabs.onUpdated.removeListener(listener)
+                                        self.fetchCount++
+                                        self.setActive('main')
+                                        self.injectJsFile()
+                                            .then(self.injectCSSFile())
+                                            .then(() => { resolve(tab) })
+                                    } else if (info.status === 'loading') {
+                                        self.url = info.url
+                                    }
                                 }
                             })
                         })
                     } else { // create new
-                        return new Promise(resolve => {
-                            chrome.tabs.create({ url: url, active: true }, async tab => {
-                                self.url = url
-                                self.tabId = tab.id
-                                chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                        chrome.tabs.create({ url: url, active: true }, async tab => {
+                            self.tabId = tab.id
+                            chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                                if (tabId === tab.id) {
                                     if (info.status === 'complete' && tabId === tab.id) {
                                         chrome.tabs.onUpdated.removeListener(listener)
                                         self.fetchCount++
@@ -257,8 +284,10 @@ export default {
                                         self.injectJsFile()
                                             .then(self.injectCSSFile())
                                             .then(() => { resolve(tab) })
+                                    } else if (info.status === 'loading') {
+                                        self.url = info.url
                                     }
-                                })
+                                }
                             })
                         })
                     }
@@ -312,16 +341,92 @@ export default {
             })
         },
         clickOn(xpath) {
-            return this.inject(`document.evaluate("${xpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();`)
+            this.setActive('tab')
+            const self = this
+            let timeout = false
+            return new Promise((resolve, reject) => {
+                setTimeout(() => {
+                    timeout = true
+                }, 10 * 1000)
+                var interval = setInterval(() => {
+                    if (timeout) {
+                        clearInterval(interval)
+                        reject(new Error('Timeout.'))
+                    }
+                    chrome.tabs.executeScript(self.tabId, {
+                        "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;`
+                    }, (result) => {
+                        if (result) {
+                            chrome.tabs.executeScript(self.tabId, {
+                                "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();`
+                            }, (result) => {
+                                if (result) {
+                                    clearInterval(interval)
+                                    chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                                        if (tabId == self.tabId) {
+                                            if (info.status === 'complete') {
+                                                chrome.tabs.onUpdated.removeListener(listener)
+                                                self.fetchCount++
+                                                self.setActive('main')
+                                                self.injectJsFile()
+                                                    .then(self.injectCSSFile())
+                                                    .then(() => { resolve(info) })
+                                            } else if (info.status === 'loading') {
+                                                self.url = info.url
+                                            }
+                                        }
+                                    })
+                                    resolve(result)
+                                }
+                            })
+                        }
+                    })
+                }, 100)
+            })
         },
-        highlightElement(xpath) {
-            const highlight = () => {
-
-            }
-            let toggle = false
-            setInterval(() => {
-                toggle
-            }, 200)
+        insertOn(xpath, value) {
+            this.setActive('tab')
+            const self = this
+            let timeout = false
+            return new Promise((resolve, reject) => {
+                setTimeout(() => {
+                    timeout = true
+                }, 10 * 1000)
+                var interval = setInterval(() => {
+                    if (timeout) {
+                        clearInterval(interval)
+                        reject(new Error('Timeout.'))
+                    }
+                    chrome.tabs.executeScript(self.tabId, {
+                        "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;`
+                    }, (result) => {
+                        if (result) {
+                            chrome.tabs.executeScript(self.tabId, {
+                                "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.value = '${value}'; console.log('ok');`
+                            }, (result) => {
+                                if (result) {
+                                    clearInterval(interval)
+                                    chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                                        if (tabId == self.tabId) {
+                                            if (info.status === 'complete') {
+                                                chrome.tabs.onUpdated.removeListener(listener)
+                                                self.fetchCount++
+                                                self.setActive('main')
+                                                self.injectJsFile()
+                                                    .then(self.injectCSSFile())
+                                                    .then(() => { resolve(info) })
+                                            } else if (info.status === 'loading') {
+                                                self.url = info.url
+                                            }
+                                        }
+                                    })
+                                    resolve(result)
+                                }
+                            })
+                        }
+                    })
+                }, 100)
+            })
         },
         inject(code) {
             this.setActive('tab')
@@ -340,7 +445,6 @@ export default {
                 chrome.tabs.executeScript(self.tabId, {
                     "file": 'inject-lib.js'
                 }, async result => {
-                    console.log(result)
                     resolve(result)
                 })
             })
@@ -359,17 +463,16 @@ export default {
             this.output = val
         },
         evaluate() {
-            console.log('Evaluating...')
             const sleep = (seconds) => { return new Promise((resolve) => setTimeout(resolve, seconds * 1000)) }
             const go = this.go
             const inject = this.inject
             const extract = this.extract
             const click = this.clickOn
+            const insert = this.insertOn
             const tabInfo = this.getTabInfo
             const out = (o) => { this.output = JSON.stringify({ ...JSON.parse(this.output), ...o }) }
             const reset = () => { this.output = '{}' }
             eval(`async function main(){${this.code}} main()`)
-            console.log('Evaluated.')
         }
     },
     beforeCreate() {

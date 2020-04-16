@@ -2,12 +2,13 @@
     "globals":
     {
         "chrome": true
-    }
-    "parserOptions": {
+    },
+    "parserOptions":
+    {
         "ecmaVersion": 2017
     },
-
-    "env": {
+    "env":
+    {
         "es6": true
     }
 }
