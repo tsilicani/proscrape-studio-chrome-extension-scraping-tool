@@ -6,6 +6,14 @@
             <v-text-field v-model="url" outlined dense hide-details label="Url" append-icon="mdi-location-enter" clearable @click:append="go(url)" />
             <v-text-field v-model="selector" class="ml-2" outlined dense hide-details label="Xpath" clearable />
             <v-text-field v-model="selectorTestOutput" class="ml-2" :label="selectorTestOutput? 'Output' : 'No Output'" outlined dense hide-details :disabled="true" />
+            <v-tooltip v-model="showOutput" bottom>
+                <template v-slot:activator="{ on }">
+                    <v-btn color="primary" icon v-on="on" @click="showOutput = !showOutput">
+                        <v-icon>mdi-arrow-down-drop-circle-outline</v-icon>
+                    </v-btn>
+                </template>
+                <span>{{selectorTestOutput ? selectorTestOutput: 'No Output'}}</span>
+            </v-tooltip>
         </v-app-bar>
         <v-navigation-drawer temporary v-model="drawer" app dark :style="{background: background}">
             <v-list dense>
@@ -113,6 +121,7 @@ export default {
             enableLiveAutocompletion: true,
             useWorker: false
         },
+        showOutput: false,
         overlay: false,
         drawer: false,
         dialogRename: false,
@@ -163,7 +172,7 @@ export default {
             payload ? localStorage.setItem('name', payload) : localStorage.setItem('name', '')
         },
         scripts: [],
-        tabDoc: undefined
+        tabDoc: undefined,
     }),
     computed: {
         script: {
@@ -313,8 +322,10 @@ export default {
         },
         getTabInfo() {
             const self = this
-            chrome.tabs.query({ currentWindow: true }, (tabs) => {
-                return tabs.filter((tab) => { return tab.id == self.tabId })
+            return new Promise(resolve => {
+                chrome.tabs.query({ currentWindow: true }, (tabs) => {
+                    resolve(tabs.filter((tab) => { return tab.id == self.tabId }))
+                })
             })
         },
         extract(xpath) {
@@ -340,9 +351,17 @@ export default {
                 })
             })
         },
-        clickOn(xpath) {
+        clickOn(xpath, isLink) {
             this.setActive('tab')
             const self = this
+            const code = `(() => {
+                try {
+                    document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();
+                    return true;
+                } catch {
+                    return false;
+                }
+            })();`
             let timeout = false
             return new Promise((resolve, reject) => {
                 setTimeout(() => {
@@ -351,42 +370,55 @@ export default {
                 var interval = setInterval(() => {
                     if (timeout) {
                         clearInterval(interval)
-                        reject(new Error('Timeout.'))
+                        reject(new Error('Timeout, verify the xpath'))
                     }
                     chrome.tabs.executeScript(self.tabId, {
-                        "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;`
+                        code: code
                     }, (result) => {
-                        if (result) {
-                            chrome.tabs.executeScript(self.tabId, {
-                                "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click();`
-                            }, (result) => {
-                                if (result) {
-                                    clearInterval(interval)
-                                    chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-                                        if (tabId == self.tabId) {
-                                            if (info.status === 'complete') {
-                                                chrome.tabs.onUpdated.removeListener(listener)
-                                                self.fetchCount++
-                                                self.setActive('main')
-                                                self.injectJsFile()
-                                                    .then(self.injectCSSFile())
-                                                    .then(() => { resolve(info) })
-                                            } else if (info.status === 'loading') {
-                                                self.url = info.url
-                                            }
+                        if (result[0]) {
+                            clearInterval(interval)
+                            if (isLink) {
+                                setTimeout(() => {
+                                    reject(new Error('Timeout, verify the connection.'))
+                                    self.setActive('main')
+                                }, 10 * 1000)
+                                chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                                    if (tabId == self.tabId) {
+                                        if (info.status === 'complete') {
+                                            chrome.tabs.onUpdated.removeListener(listener)
+                                            self.fetchCount++
+                                            self.injectJsFile()
+                                                .then(self.injectCSSFile())
+                                                .then(() => {
+                                                    self.setActive('main')
+                                                    resolve(result)
+                                                })
+                                        } else if (info.status === 'loading') {
+                                            self.url = info.url
                                         }
-                                    })
-                                    resolve(result)
-                                }
-                            })
+                                    }
+                                })
+                            } else {
+                                self.setActive('main')
+                                resolve(result)
+                            }
                         }
                     })
                 }, 100)
             })
         },
-        insertOn(xpath, value) {
+        insertOn(xpath, value, isLink) {
             this.setActive('tab')
             const self = this
+            const code = `(() => {
+                try {
+                    document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click()
+                    document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.value = '${value}'
+                    return true;
+                } catch {
+                    return false;
+                }
+            })();`
             let timeout = false
             return new Promise((resolve, reject) => {
                 setTimeout(() => {
@@ -395,37 +427,48 @@ export default {
                 var interval = setInterval(() => {
                     if (timeout) {
                         clearInterval(interval)
-                        reject(new Error('Timeout.'))
+                        reject(new Error('Timeout, verify the xpath'))
                     }
                     chrome.tabs.executeScript(self.tabId, {
-                        "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;`
+                        code: code
                     }, (result) => {
-                        if (result) {
-                            chrome.tabs.executeScript(self.tabId, {
-                                "code": `document.evaluate('${xpath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.value = '${value}'; console.log('ok');`
-                            }, (result) => {
-                                if (result) {
-                                    clearInterval(interval)
-                                    chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-                                        if (tabId == self.tabId) {
-                                            if (info.status === 'complete') {
-                                                chrome.tabs.onUpdated.removeListener(listener)
-                                                self.fetchCount++
-                                                self.setActive('main')
-                                                self.injectJsFile()
-                                                    .then(self.injectCSSFile())
-                                                    .then(() => { resolve(info) })
-                                            } else if (info.status === 'loading') {
-                                                self.url = info.url
-                                            }
+                        if (result[0]) {
+                            clearInterval(interval)
+                            if (isLink) {
+                                setTimeout(() => {
+                                    reject(new Error('Timeout, verify the connection.'))
+                                    self.setActive('main')
+                                }, 10 * 1000)
+                                chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                                    if (tabId == self.tabId) {
+                                        if (info.status === 'complete') {
+                                            chrome.tabs.onUpdated.removeListener(listener)
+                                            self.fetchCount++
+                                            self.injectJsFile()
+                                                .then(self.injectCSSFile())
+                                                .then(() => {
+                                                    self.setActive('main')
+                                                    resolve(result)
+                                                })
+                                        } else if (info.status === 'loading') {
+                                            self.url = info.url
                                         }
-                                    })
-                                    resolve(result)
-                                }
-                            })
+                                    }
+                                })
+                            } else {
+                                self.setActive('main')
+                                resolve(result)
+                            }
                         }
                     })
                 }, 100)
+            })
+        },
+        sendMessage(message) {
+            return new Promise(resolve => {
+                chrome.tabs.sendMessage(this.tabId, message, undefined, (response) => {
+                    console.log(response)
+                })
             })
         },
         inject(code) {
@@ -459,30 +502,87 @@ export default {
                 })
             })
         },
+        watchTab() {
+            const self = this
+            chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                console.log(tabId, info)
+                if (tabId == self.tabId) {
+                    if (info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener)
+                        self.fetchCount++
+                        self.injectJsFile()
+                            .then(self.injectCSSFile())
+                    } else if (info.status === 'loading') {
+                        self.url = info.url
+                    }
+                }
+            })
+        },
+        removeCookies(domain) {
+            function extrapolateUrlFromCookie(cookie) {
+                var prefix = cookie.secure ? "https://" : "http://";
+                if (cookie.domain.charAt(0) == ".")
+                    prefix += "www";
+
+                return prefix + cookie.domain + cookie.path;
+            }
+            return new Promise(resolve => {
+                chrome.windows.getCurrent((result) => {
+                    if (result.incognito) {
+                        chrome.cookies.getAll({}, function(cookies) {
+                            cookies.forEach(function(cookie, index) {
+                                chrome.cookies.remove({ url: extrapolateUrlFromCookie(cookie), name: cookie.name });
+                            })
+                            resolve(true)
+                        })
+                    } else {
+                        resolve(true)
+                    }
+                })
+            })
+        },
         out(val) {
             this.output = val
         },
-        evaluate() {
+        async evaluate() {
+            const range = (start, stop, step = 1) => Array(Math.ceil((stop - start) / step)).fill(start).map((x, y) => x + y * step)
+            const pick = (array) => { return array[Math.floor(Math.random() * array.length)]; }
             const sleep = (seconds) => { return new Promise((resolve) => setTimeout(resolve, seconds * 1000)) }
             const go = this.go
             const inject = this.inject
             const extract = this.extract
             const click = this.clickOn
             const insert = this.insertOn
-            const tabInfo = this.getTabInfo
             const out = (o) => { this.output = JSON.stringify({ ...JSON.parse(this.output), ...o }) }
             const reset = () => { this.output = '{}' }
-            eval(`async function main(){${this.code}} main()`)
+            this.removeCookies()
+                .then(() => {
+                    eval(`async function main(){${this.code} } main()`)
+                })
         }
     },
     beforeCreate() {
-        this.overlay = true
+        const self = this
+        self.overlay = true
         chrome.storage.sync.get(['scripts'], result => {
             if (result['scripts']) {
-                this.scripts = result['scripts']
+                self.scripts = result['scripts']
             }
-            this.overlay = false
+            self.overlay = false
         })
+        setInterval(() => {
+            self.getTabInfo().then((info) => {
+                if (info.length) {
+                    if (info.url != self.url) {
+                        console.log(info.url, self.url)
+                        self.injectJsFile()
+                            .then(self.injectCSSFile())
+                    }
+                } else {
+                    this.url = ''
+                }
+            })
+        }, 1000)
     },
     mounted() {
         window.addEventListener('beforeunload', this.destroyTab)
