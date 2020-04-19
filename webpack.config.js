@@ -13,9 +13,7 @@ const config = {
         'background': './background.js',
         'index': './main/index.js',
         'tab': './tab/tab.js',
-        'jquery': './jquery.min.js',
-        'inject-lib': './inject-lib.js',
-        'inject': './inject.css'
+        'inject': './inject.js',
     },
     output: {
         path: __dirname + '/dist',

@@ -3,7 +3,7 @@
         <v-app-bar flat clipped-left dense :style="{background: background}">
             <v-app-bar-nav-icon @click="drawer = !drawer" color="primary" />
             <span class="title ml-3 mr-5 ciccio">ProScrape&nbsp;<span class="font-weight-light">Studio</span></span>
-            <v-text-field v-model="url" outlined dense hide-details label="Url" append-icon="mdi-location-enter" clearable @click:append="go(url)" />
+            <v-text-field v-model="url" outlined dense hide-details label="Url" append-icon="mdi-location-enter" clearable @click:append="go(url)" @mouseover="editUrl = true" @mouseleave="editUrl = false" />
             <v-text-field v-model="selector" class="ml-2" outlined dense hide-details label="Xpath" clearable />
             <v-text-field v-model="selectorTestOutput" class="ml-2" :label="selectorTestOutput? 'Output' : 'No Output'" outlined dense hide-details :disabled="true" />
             <v-tooltip v-model="showOutput" bottom>
@@ -17,7 +17,7 @@
         </v-app-bar>
         <v-navigation-drawer temporary v-model="drawer" app dark :style="{background: background}">
             <v-list dense>
-                <v-list-item link>
+                <!-- <v-list-item link>
                     <v-list-item-action>
                         <v-icon>settings</v-icon>
                     </v-list-item-action>
@@ -27,7 +27,7 @@
                         </v-list-item-title>
                     </v-list-item-content>
                 </v-list-item>
-                <v-divider dark class="my-4" />
+                <v-divider dark class="my-4" /> -->
                 <v-list-item>
                     <v-list-item-title>Projects</v-list-item-title>
                     <v-spacer></v-spacer>
@@ -83,8 +83,8 @@
                     <span class="headline">Rename</span>
                 </v-card-title>
                 <v-card-text class="mt-2">
-                    <v-form ref="form">
-                        <v-text-field v-model="name" label="Name" outlined dense hide-details />
+                    <v-form ref="form" v-model="valid" lazy-validation>
+                        <v-text-field v-model="name" label="Name" outlined dense :rules="[nameExists]" hint="The name must be unique." />
                     </v-form>
                 </v-card-text>
                 <v-card-actions>
@@ -100,6 +100,13 @@ const browser = require("webextension-polyfill")
 const FileSaver = require('file-saver')
 import { v4 as uuidv4 } from 'uuid'
 
+String.prototype.allTrim = String.prototype.allTrim ||
+    function() {
+        return this.replace(/\s+/g, ' ')
+            .replace(/^\s+|\s+$/, '')
+            .trim();
+    };
+
 const demo =
     `/*
 const tabLaunched = await go('https://example.org')
@@ -108,6 +115,8 @@ const string = await extract('//h1')
 out({'string': string})
 await inject("console.log('ciao)")
 */`
+
+let tabDoc
 
 export default {
     components: {
@@ -121,6 +130,7 @@ export default {
             enableLiveAutocompletion: true,
             useWorker: false
         },
+        valid: false,
         showOutput: false,
         overlay: false,
         drawer: false,
@@ -129,6 +139,7 @@ export default {
         fetchCount: 0,
         selectorTestOutput: '',
         codeIsNew: undefined,
+        editUrl: false,
         get output() {
             return localStorage.getItem(this.id) || '{}'
         },
@@ -172,7 +183,6 @@ export default {
             payload ? localStorage.setItem('name', payload) : localStorage.setItem('name', '')
         },
         scripts: [],
-        tabDoc: undefined,
     }),
     computed: {
         script: {
@@ -204,6 +214,9 @@ export default {
         },
     },
     methods: {
+        nameExists(name) {
+            return this.scripts.filter(script => script.name == name).length == 1 || 'This name already exists.'
+        },
         sync() {
             chrome.storage.sync.set({ scripts: this.scripts })
         },
@@ -229,7 +242,8 @@ export default {
             const hr = ("0" + t.getHours()).slice(-2);
             const min = ("0" + t.getMinutes()).slice(-2);
             const sec = ("0" + t.getSeconds()).slice(-2);
-            return t.getFullYear() + "-" + t.getMonth() + 1 + "-" + t.getDate() + "-" + hr + "-" + min + "-" + sec
+            const month = t.getMonth() + 1;
+            return t.getFullYear() + "-" + month + "-" + t.getDate() + "-" + hr + "-" + min + "-" + sec
         },
         exportScripts() {
             const blob = new Blob([JSON.stringify(this.scripts)], { type: "text/plain;charset=utf-8" });
@@ -261,6 +275,7 @@ export default {
             this.code = demo
         },
         go(url) {
+            console.log(url)
             const self = this
             return new Promise(resolve => {
                 chrome.tabs.query({ currentWindow: true }, (tabs) => {
@@ -270,11 +285,19 @@ export default {
                                 if (tabId === tab.id) {
                                     if (info.status === 'complete') {
                                         chrome.tabs.onUpdated.removeListener(listener)
-                                        self.fetchCount++
-                                        self.setActive('main')
                                         self.injectJsFile()
-                                            .then(self.injectCSSFile())
-                                            .then(() => { resolve(tab) })
+                                            .then(() => {
+                                                chrome.tabs.executeScript(self.tabId, {
+                                                    "code": "document.documentElement.innerHTML;"
+                                                }, async result => {
+                                                    const htmlString = result ? result[0] : ''
+                                                    const parser = new DOMParser()
+                                                    tabDoc = parser.parseFromString(htmlString, "text/html")
+                                                    self.fetchCount++
+                                                    self.setActive('main')
+                                                    resolve(tab)
+                                                })
+                                            })
                                     } else if (info.status === 'loading') {
                                         self.url = info.url
                                     }
@@ -288,11 +311,19 @@ export default {
                                 if (tabId === tab.id) {
                                     if (info.status === 'complete' && tabId === tab.id) {
                                         chrome.tabs.onUpdated.removeListener(listener)
-                                        self.fetchCount++
-                                        self.setActive('main')
                                         self.injectJsFile()
-                                            .then(self.injectCSSFile())
-                                            .then(() => { resolve(tab) })
+                                            .then(() => {
+                                                chrome.tabs.executeScript(self.tabId, {
+                                                    "code": "document.documentElement.innerHTML;"
+                                                }, async result => {
+                                                    const htmlString = result ? result[0] : ''
+                                                    const parser = new DOMParser()
+                                                    tabDoc = parser.parseFromString(htmlString, "text/html")
+                                                    self.fetchCount++
+                                                    self.setActive('main')
+                                                    resolve(tab)
+                                                })
+                                            })
                                     } else if (info.status === 'loading') {
                                         self.url = info.url
                                     }
@@ -330,7 +361,7 @@ export default {
         },
         extract(xpath) {
             const self = this
-            return new Promise(resolve => {
+            return new Promise((resolve, reject) => {
                 chrome.tabs.executeScript(self.tabId, {
                     "code": "document.documentElement.innerHTML;"
                 }, async result => {
@@ -341,15 +372,51 @@ export default {
                     if (xpath) {
                         try {
                             const extracted = doc.evaluate(xpath, doc, null, XPathResult.STRING_TYPE, null)
-                            stringExtracted = extracted.stringValue
+                            stringExtracted = extracted.stringValue.allTrim()
                         } catch (e) {
-                            console.log(e)
+                            reject(e)
                         }
                     }
                     if (self.selector == xpath) { self.selectorTestOutput = stringExtracted }
                     resolve(stringExtracted)
                 })
             })
+        },
+        extractFromCopy(xpath) {
+            const extracted = tabDoc.evaluate(xpath, tabDoc, null, XPathResult.STRING_TYPE, null)
+            return extracted.stringValue.allTrim()
+        },
+        extractList(xpath) {
+            const self = this
+            return new Promise((resolve, reject) => {
+                chrome.tabs.executeScript(self.tabId, {
+                    "code": "document.documentElement.innerHTML;"
+                }, async result => {
+                    const htmlString = result ? result[0] : ''
+                    const parser = new DOMParser()
+                    const doc = parser.parseFromString(htmlString, "text/html")
+                    const res = []
+                    if (xpath) {
+                        try {
+                            var nodesSnapshot = document.evaluate(xpath, doc, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                            for (var i = 0; i < nodesSnapshot.snapshotLength; i++) {
+                                res.push(nodesSnapshot.snapshotItem(i).textContent.allTrim())
+                            }
+                            resolve(res)
+                        } catch (e) {
+                            reject(e)
+                        }
+                    }
+                })
+            })
+        },
+        extractListFromCopy(xpath) {
+            const res = []
+            const extracted = tabDoc.evaluate(xpath, tabDoc, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null)
+            for (var i = 0; i < extracted.snapshotLength; i++) {
+                res.push(extracted.snapshotItem(i).textContent.allTrim())
+            }
+            return res
         },
         clickOn(xpath, isLink) {
             this.setActive('tab')
@@ -388,7 +455,6 @@ export default {
                                             chrome.tabs.onUpdated.removeListener(listener)
                                             self.fetchCount++
                                             self.injectJsFile()
-                                                .then(self.injectCSSFile())
                                                 .then(() => {
                                                     self.setActive('main')
                                                     resolve(result)
@@ -445,7 +511,6 @@ export default {
                                             chrome.tabs.onUpdated.removeListener(listener)
                                             self.fetchCount++
                                             self.injectJsFile()
-                                                .then(self.injectCSSFile())
                                                 .then(() => {
                                                     self.setActive('main')
                                                     resolve(result)
@@ -486,17 +551,7 @@ export default {
             const self = this
             return new Promise(resolve => {
                 chrome.tabs.executeScript(self.tabId, {
-                    "file": 'inject-lib.js'
-                }, async result => {
-                    resolve(result)
-                })
-            })
-        },
-        injectCSSFile() {
-            const self = this
-            return new Promise(resolve => {
-                chrome.tabs.insertCSS(self.tabId, {
-                    "file": "inject.css"
+                    "file": 'inject.js'
                 }, async result => {
                     resolve(result)
                 })
@@ -511,7 +566,6 @@ export default {
                         chrome.tabs.onUpdated.removeListener(listener)
                         self.fetchCount++
                         self.injectJsFile()
-                            .then(self.injectCSSFile())
                     } else if (info.status === 'loading') {
                         self.url = info.url
                     }
@@ -550,11 +604,15 @@ export default {
             const sleep = (seconds) => { return new Promise((resolve) => setTimeout(resolve, seconds * 1000)) }
             const go = this.go
             const inject = this.inject
-            const extract = this.extract
+            const extract = this.extractFromCopy
+            const extractList = this.extractListFromCopy
             const click = this.clickOn
             const insert = this.insertOn
-            const out = (o) => { this.output = JSON.stringify({ ...JSON.parse(this.output), ...o }) }
+            const out = (o) => { this.output = JSON.stringify({ ...JSON.parse(this.output), ...o }, undefined, 4) }
             const reset = () => { this.output = '{}' }
+            const already = (key) => {
+                return Object.keys(JSON.parse(this.output)).filter(item => item == key).length
+            }
             this.removeCookies()
                 .then(() => {
                     eval(`async function main(){${this.code} } main()`)
@@ -569,19 +627,33 @@ export default {
                 self.scripts = result['scripts']
             }
             self.overlay = false
-        })
+        });
+        const code = `(() => {
+            let el = document.getElementById('e8s9c1uam4my6s4k7u7k')
+            if (el) {
+                return Boolean(el.outerHTML)
+            } else {
+                return false
+            }
+        })();`
         setInterval(() => {
-            self.getTabInfo().then((info) => {
-                if (info.length) {
-                    if (info.url != self.url) {
-                        console.log(info.url, self.url)
-                        self.injectJsFile()
-                            .then(self.injectCSSFile())
+            if (self.tabId) {
+                self.getTabInfo().then((info) => {
+                    if (info.length) {
+                        if (!self.editUrl) { self.url = info[0].url ? info[0].url : undefined }
+                        chrome.tabs.executeScript(self.tabId, {
+                            code: code
+                        }, result => {
+                            if (!result[0]) {
+                                self.injectJsFile()
+                            }
+                        })
+                    } else {
+                        self.tabId = undefined
+                        self.url = undefined
                     }
-                } else {
-                    this.url = ''
-                }
-            })
+                })
+            }
         }, 1000)
     },
     mounted() {
