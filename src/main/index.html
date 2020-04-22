@@ -46,12 +46,14 @@
 
     .split__left {
         width: 50%;
-        background-color: #3c3c3c;
+        display: flex;
+        flex-flow: column;
     }
 
     .split__right {
         flex: 1;
-        background-color: #3c3c3c;
+        display: flex;
+        flex-flow: column;
     }
 
     .split__bar {
@@ -63,7 +65,11 @@
 
     .tab-name-container {
         background-color: #2f3129;
-        height: 5%;
+    }
+
+    .ace_editor {
+        flex: 2;
+        overflow: auto;
     }
     </style>
     <% if (NODE_ENV === 'development') { %>

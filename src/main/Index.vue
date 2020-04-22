@@ -64,14 +64,14 @@
                         <a class="white--text">{{name?name:'Untitled'}}</a>
                     </div>
                 </div>
-                <editor v-model="code" @init="editorInit" lang="javascript" theme="monokai" :options="aceOptions" width="100%" height="95%" />
+                <editor v-model="code" @init="editorInit" lang="javascript" theme="monokai" :options="aceOptions" width="100%" />
             </div>
             <div class="split__bar"></div>
             <div class="split__right">
                 <div class="tab-name-container">
                     <div class="tab-name pa-2">Output</div>
                 </div>
-                <editor v-model="output" @init="editorInit" lang="json" theme="monokai" width="100%" height="95%" />
+                <editor v-model="output" @init="editorInit" lang="json" theme="monokai" width="100%" />
             </div>
         </div>
         <v-overlay :value="overlay">
@@ -97,6 +97,7 @@
 </template>
 <script>
 const browser = require("webextension-polyfill")
+const beautify = require('js-beautify').js
 const FileSaver = require('file-saver')
 import { v4 as uuidv4 } from 'uuid'
 
@@ -110,6 +111,8 @@ String.prototype.allTrim = String.prototype.allTrim ||
 const demo =
     `/*
 const tabLaunched = await go('https://example.org')
+await click(xpath)
+await insert(xpath, string)
 await sleep(seconds)
 const string = await extract('//h1')
 out({'string': string})
@@ -140,12 +143,7 @@ export default {
         selectorTestOutput: '',
         codeIsNew: undefined,
         editUrl: false,
-        get output() {
-            return localStorage.getItem(this.id) || '{}'
-        },
-        set output(payload) {
-            payload ? localStorage.setItem(this.id, payload) : localStorage.setItem(this.id, '{}')
-        },
+        output: '{}',
         get url() {
             return localStorage.getItem('url') || ''
         },
@@ -212,6 +210,16 @@ export default {
         selectorTestParams() {
             if (this.tabId) { this.extract(this.selector) }
         },
+        output() {
+            chrome.storage.local.set({
+                [this.id]: this.output
+            })
+        },
+        id() {
+            chrome.storage.local.get([this.id], (result) => {
+                this.output = Object.keys(result).length ? result[this.id] : '{}'
+            })
+        },
     },
     methods: {
         nameExists(name) {
@@ -235,7 +243,7 @@ export default {
             this.scripts = this.scripts.filter(script => script.id != id)
             this.script = this.script
             this.sync()
-            localStorage.removeItem(id)
+            chrome.storage.local.remove([id])
         },
         getDate() {
             const t = new Date()
@@ -608,10 +616,10 @@ export default {
             const extractList = this.extractListFromCopy
             const click = this.clickOn
             const insert = this.insertOn
-            const out = (o) => { this.output = JSON.stringify({ ...JSON.parse(this.output), ...o }, undefined, 4) }
+            const out = (o) => { this.output = JSON.stringify({ ...JSON.parse(this.output ? this.output : '{}'), ...o }, undefined, 4) }
             const reset = () => { this.output = '{}' }
             const already = (key) => {
-                return Object.keys(JSON.parse(this.output)).filter(item => item == key).length
+                return Object.keys(JSON.parse(this.output ? this.output : '{}')).filter(item => item == key).length
             }
             this.removeCookies()
                 .then(() => {
@@ -625,6 +633,9 @@ export default {
         chrome.storage.sync.get(['scripts'], result => {
             if (result['scripts']) {
                 self.scripts = result['scripts']
+                chrome.storage.local.get([this.id], (result) => {
+                    this.output = Object.keys(result).length ? result[this.id] : '{}'
+                })
             }
             self.overlay = false
         });
@@ -667,6 +678,9 @@ export default {
                 switch (c) {
                     case 66: // b
                         self.evaluate()
+                        break
+                    case 114: // f3
+                        self.code = beautify(self.code, { indent_size: 4, space_in_empty_paren: true })
                         break
                 }
             }

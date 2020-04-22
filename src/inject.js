@@ -1,3 +1,4 @@
+window.addEventListener('beforeunload', () => { localStorage.clear(); })
 const e8s9c1uam4my6s4k7u7kreadyStateCheckInterval = setInterval(function() {
     if (document.readyState === 'complete') {
 
